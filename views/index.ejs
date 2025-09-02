@@ -1,0 +1,54 @@
+<%- include('partials/header') %>
+
+<main>
+    <div class="container mt-5 pt-5">
+    <div class="text-center py-5 bg-light rounded shadow-sm">
+        <h1 class="display-3 fw-bold mb-3 text-primary">Welcome to TripPlanner</h1>
+        <p class="lead mb-4 fs-5 text-secondary">
+        Plan your personal trips effortlessly, save your routes, and get real-time weather updates to stay prepared.
+        </p>
+
+        <% if (!user) { %>
+        <a href="/register" class="btn btn-lg btn-primary px-5 shadow-sm">
+            Get Started
+            <i class="bi bi-arrow-right ms-2"></i>
+        </a>
+        <% } else { %>
+        <a href="/plan-route" class="btn btn-lg btn-success px-5 shadow-sm">
+            Plan Your Trip
+            <i class="bi bi-geo-alt ms-2"></i>
+        </a>
+        <% } %>
+    </div>
+
+    <div class="row mt-5 gx-4 gy-4 justify-content-center">
+        <div class="col-md-4 text-center">
+        <div class="p-4 border rounded shadow-sm h-100">
+            <i class="bi bi-map-fill fs-1 text-primary mb-3"></i>
+            <h4 class="mb-2">Create Routes</h4>
+            <p class="text-muted">
+            Use interactive maps to craft your ideal trekking or cycling paths tailored to your preferences.
+            </p>
+        </div>
+        </div>
+        <div class="col-md-4 text-center">
+        <div class="p-4 border rounded shadow-sm h-100">
+            <i class="bi bi-folder2-open fs-1 text-success mb-3"></i>
+            <h4 class="mb-2">Save & Manage</h4>
+            <p class="text-muted">
+            Securely save your routes and revisit your trip history anytime, all linked to your personal account.
+            </p>
+        </div>
+        </div>
+        <div class="col-md-4 text-center">
+        <div class="p-4 border rounded shadow-sm h-100">
+            <i class="bi bi-cloud-sun-fill fs-1 text-warning mb-3"></i>
+            <h4 class="mb-2">Weather Forecasts</h4>
+            <p class="text-muted">
+            Get up-to-date three-day weather forecasts to plan your trips safely and efficiently.
+            </p>
+        </div>
+        </div>
+    </div>
+    </div>
+</main>

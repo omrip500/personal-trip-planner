@@ -1,0 +1,393 @@
+<%- include('partials/header') %>
+<div class="container-fluid py-5">
+    <h2 class="text-center mb-4 fw-bold text-primary">Plan Your Trip</h2>
+
+    <div class="row g-4">
+        <!-- Left Column -->
+        <div class="col-md-4">
+            <div class="card shadow-lg border-0 rounded-4 p-4">
+                <h5 class="text-center mb-3 text-secondary">Route Details</h5>
+                <form id="routeForm">
+                    <!-- Start Location -->
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Location</label>
+                        <input id="startInput" type="text" placeholder="Enter city..." class="form-control rounded-pill" required>
+                    </div>
+                    <!-- Trip Type -->
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Trip Type</label>
+                        <select id="tripType" class="form-select rounded-pill" required>
+                            <option value="cycling">🚴 Cycling (loop 20-50 km)</option>
+                            <option value="trekking">🥾 Trekking (loop 5-15 km)</option>
+                        </select>
+                    </div>
+                    <button type="button" id="generateRoute" class="btn btn-primary w-100 rounded-pill">
+                        <i class="bi bi-geo-alt-fill me-2"></i> Generate Route
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Right Column -->
+        <div class="col-md-8">
+            <div class="card shadow-lg border-0 rounded-4">
+                <div id="map" style="height: 500px; border-radius: 12px 12px 0 0;"></div>
+                <div class="p-4">
+                    <p id="distanceInfo" class="fw-semibold mb-3 text-primary">Total Distance: 0 km</p>
+                    <div id="dayDistances" class="mb-3"></div>
+                    <div id="weatherInfo" class="mb-3"></div>
+                    <div id="cityImage" class="mb-3 text-center"></div>
+                    <form method="POST" action="/save-route" id="saveRouteForm">
+                        <input type="hidden" name="coordinates" id="coordinates">
+                        <input type="hidden" name="distance" id="distance">
+                        <input type="hidden" name="city" id="city">
+                        <input type="hidden" name="cityImageUrl" id="cityImageUrl">
+                        <input type="hidden" name="waypoints" id="waypoints">
+                        <input type="hidden" name="tripTypeVal" id="tripTypeVal">
+                        <div class="mb-2">
+                            <input type="text" name="name" placeholder="Route Name" class="form-control rounded-pill" required>
+                        </div>
+                        <div class="mb-3">
+                            <input type="text" name="description" placeholder="Description" class="form-control rounded-pill" required>
+                        </div>
+                        <button class="btn btn-success w-100 rounded-pill">
+                            <i class="bi bi-save2-fill me-2"></i> Save Route
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- External libraries -->
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC2Sj4qPjZsUVeCjw19Zau82sa9F8U2HN0&libraries=places"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" />
+
+<script>
+    let map = L.map('map').setView([32.0853, 34.7818], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 20,
+        attribution: ''
+    }).addTo(map);
+
+    let routingControl = null;
+    let startMarker = null;
+    let dayMarkers = [];
+    let routeCoordinates = [];
+    let startCoords = null;
+
+    const startIcon = L.icon({
+        iconUrl: 'https://cdn-icons-png.flaticon.com/512/64/64113.png',
+        iconSize: [35, 45],
+        iconAnchor: [17, 45],
+        popupAnchor: [0, -40],
+    });
+
+    const startAutocomplete = new google.maps.places.Autocomplete(document.getElementById('startInput'));
+    startAutocomplete.addListener('place_changed', () => {
+        const place = startAutocomplete.getPlace();
+        if (!place.geometry) return;
+        startCoords = [place.geometry.location.lat(), place.geometry.location.lng()];
+        console.log(place, "-------------")
+        document.getElementById('city').value = place.formatted_address;
+
+        if (startMarker) map.removeLayer(startMarker);
+        startMarker = L.marker(startCoords, {icon: startIcon}).addTo(map).bindPopup(`<b>Start:</b> ${place.name}`).openPopup();
+        map.setView(startCoords, 13);
+    });
+
+    function clearRoute() {
+        if (routingControl) {
+            map.removeControl(routingControl);
+            routingControl = null;
+        }
+        dayMarkers.forEach(m => map.removeLayer(m));
+        dayMarkers = [];
+        routeCoordinates = [];
+        document.getElementById('distanceInfo').innerText = 'Total Distance: 0 km';
+        document.getElementById('dayDistances').innerHTML = '';
+        document.getElementById('weatherInfo').innerHTML = '';
+        document.getElementById('cityImage').innerHTML = '';
+        document.getElementById('coordinates').value = '';
+        document.getElementById('distance').value = '';
+        document.getElementById('waypoints').value = '';
+    }
+
+    function addDayMarker(latlng, dayNum) {
+        const marker = L.marker(latlng, {
+            icon: L.divIcon({
+                className: 'day-marker',
+                html: `<div style="background:#0d6efd; color:#fff; border-radius:50%; width:26px; height:26px; display:flex; align-items:center; justify-content:center; font-weight:bold;">${dayNum}</div>`,
+                iconSize: [26, 26],
+                iconAnchor: [13, 26]
+            })
+        }).addTo(map);
+        dayMarkers.push(marker);
+    }
+
+    async function generateLoopRoute(profile, minKm, maxKm) {
+        if (!startCoords) {
+            alert("Please select a Location.");
+            return;
+        }
+        clearRoute();
+
+        let radiusKm = profile === 'cycling' ? 5 : 1.5;
+        let ghostPointsCount = 0;
+        const maxGhostPoints = 10;
+        const maxAttempts = 15;
+        let attempts = 0;
+
+        async function attemptRouteGeneration() {
+            const lat = startCoords[0];
+            const lng = startCoords[1];
+            const latOffset = radiusKm / 110.574;
+            const lngOffset = radiusKm / (111.320 * Math.cos(lat * Math.PI / 180));
+
+            const baseWaypoints = [
+                L.latLng(lat, lng),
+                L.latLng(lat + latOffset, lng),
+                L.latLng(lat + latOffset, lng + lngOffset),
+                L.latLng(lat, lng + lngOffset),
+                L.latLng(lat - latOffset, lng),
+                L.latLng(lat, lng)
+            ];
+
+            const ghostWaypoints = generateGhostWaypoints(baseWaypoints, ghostPointsCount, 0.002);
+            const combinedWaypoints = [...baseWaypoints.slice(0, -1), ...ghostWaypoints, baseWaypoints[baseWaypoints.length - 1]];
+            combinedWaypoints.sort(() => Math.random() - 0.5);
+
+            document.getElementById('waypoints').value = JSON.stringify(
+                combinedWaypoints.map(wp => [wp.lat, wp.lng])
+            );
+
+            if (routingControl) map.removeControl(routingControl);
+
+            routingControl = L.Routing.control({
+                waypoints: combinedWaypoints,
+                router: L.Routing.osrmv1({
+                    serviceUrl: 'https://router.project-osrm.org/route/v1',
+                    profile: profile
+                }),
+                lineOptions: { styles: [] },
+                createMarker: function (i, waypoint) {
+                    if (i === 0) {
+                        if (startMarker) map.removeLayer(startMarker);
+                        startMarker = L.marker(waypoint.latLng, { icon: startIcon })
+                            .addTo(map)
+                            .bindPopup("<b>Start/End</b>")
+                            .openPopup();
+                        return startMarker;
+                    }
+                    return null;
+                },
+                fitSelectedRoutes: true,
+                addWaypoints: false,
+                routeWhileDragging: false,
+                showAlternatives: false
+            }).addTo(map);
+
+            routingControl.on('routesfound', function (e) {
+                const route = e.routes[0];
+                const totalDistanceKm = route.summary.totalDistance / 1000;
+
+                console.log(`Attempt ${attempts + 1}: Distance = ${totalDistanceKm.toFixed(1)} km | GhostPoints: ${ghostPointsCount}`);
+
+                if (totalDistanceKm < minKm) {
+                    if (ghostPointsCount < maxGhostPoints) {
+                        ghostPointsCount++; // Add more ghost points to increase route length
+                        attempts++;
+                        attemptRouteGeneration();
+                    } else if (attempts < maxAttempts) {
+                        radiusKm += 0.3; // Slightly expand base loop radius
+                        attempts++;
+                        attemptRouteGeneration();
+                    } else {
+                        alert(`Unable to generate a loop within ${minKm}–${maxKm} km after ${maxAttempts} attempts.`);
+                        clearRoute();
+                        hideLoader();
+                    }
+                    return;
+                }
+
+                if (totalDistanceKm > maxKm) {
+                    if (ghostPointsCount > 0) {
+                        ghostPointsCount--; // Reduce ghost points to shorten route
+                        attempts++;
+                        attemptRouteGeneration();
+                    } else if (radiusKm > 1) {
+                        radiusKm -= 0.3; // Shrink base loop
+                        attempts++;
+                        attemptRouteGeneration();
+                    } else {
+                        alert(`Route is exceeding ${maxKm} km. Try another location.`);
+                        clearRoute();
+                        hideLoader();
+                    }
+                    return;
+                }
+
+                // Successful Route Found
+                finalizeRoute(route);
+            });
+        }
+
+        attemptRouteGeneration();
+
+        function finalizeRoute(route) {
+            const coords = route.coordinates;
+            let halfDist = route.summary.totalDistance / 2;
+            let distAccum = 0, midpointIndex = 0;
+            for (let i = 1; i < coords.length; i++) {
+                distAccum += coords[i - 1].distanceTo(coords[i]);
+                if (distAccum >= halfDist) { midpointIndex = i; break; }
+            }
+
+            const day1Coords = coords.slice(0, midpointIndex + 1).map(c => [c.lat, c.lng]);
+            const day2Coords = coords.slice(midpointIndex).map(c => [c.lat, c.lng]);
+
+            if (window.dayPolylines) window.dayPolylines.forEach(poly => map.removeLayer(poly));
+            window.dayPolylines = [];
+
+            const poly1 = L.polyline(day1Coords, { color: '#FF0000', weight: 6 }).addTo(map); // Bright Red
+            const poly2 = L.polyline(day2Coords, { color: '#0000FF', weight: 6 }).addTo(map);
+            window.dayPolylines.push(poly1, poly2);
+
+            addDirectionArrows(coords);
+
+            addDayMarker([coords[0].lat, coords[0].lng], 1);
+            addDayMarker([coords[midpointIndex].lat, coords[midpointIndex].lng], 2);
+
+            const distDay1 = (distAccum / 1000).toFixed(1);
+            const distDay2 = ((route.summary.totalDistance - distAccum) / 1000).toFixed(1);
+            document.getElementById('distanceInfo').innerText = `Total Loop Length: ${route.summary.totalDistance / 1000.0.toFixed(1)} km`;
+            document.getElementById('dayDistances').innerHTML = `<b>Day 1:</b> ${distDay1} km<br><b>Day 2:</b> ${distDay2} km`;
+
+            routeCoordinates = coords.map(c => [c.lat, c.lng]);
+            document.getElementById('coordinates').value = JSON.stringify(routeCoordinates);
+            document.getElementById('distance').value = (route.summary.totalDistance / 1000).toFixed(1);
+            document.getElementById('tripTypeVal').value = document.getElementById('tripType').value;
+
+            getWeather(startCoords[0], startCoords[1]);
+            console.log(document.getElementById('city').value, "-------------")
+            getCountryImageFromCity(document.getElementById('city').value);
+        }
+    }
+
+    // Ghost Waypoints Generator (same as before)
+    function generateGhostWaypoints(points, countPerSegment = 1, deviation = 0.002) {
+        let ghostPoints = [];
+        for (let i = 0; i < points.length - 1; i++) {
+            const start = points[i];
+            const end = points[i + 1];
+            for (let j = 0; j < countPerSegment; j++) {
+                const factor = Math.random();
+                const lat = start.lat + factor * (end.lat - start.lat) + (Math.random() - 0.5) * deviation;
+                const lng = start.lng + factor * (end.lng - start.lng) + (Math.random() - 0.5) * deviation;
+                ghostPoints.push(L.latLng(lat, lng));
+            }
+        }
+        return ghostPoints;
+    }
+
+    function addDirectionArrows(coords) {
+        if (window.arrowMarkers && window.arrowMarkers.length > 0) {
+            window.arrowMarkers.forEach(m => map.removeLayer(m));
+        }
+        window.arrowMarkers = [];
+
+        const step = Math.floor(coords.length / 15);
+        for (let i = step; i < coords.length; i += step) {
+            const prev = coords[i - 1];
+            const curr = coords[i];
+            const angle = Math.atan2(curr.lat - prev.lat, curr.lng - prev.lng) * (180 / Math.PI);
+
+            const arrowIcon = L.divIcon({
+                html: `<div style="width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 14px solid orange; transform: rotate(${angle}deg); transform-origin: center; filter: drop-shadow(0 0 2px #fff);"></div>`,
+                className: '',
+                iconSize: [14, 14]
+            });
+
+            const arrowMarker = L.marker([curr.lat, curr.lng], { icon: arrowIcon, interactive: false }).addTo(map);
+            window.arrowMarkers.push(arrowMarker);
+        }
+    }
+
+    document.getElementById('generateRoute').addEventListener('click', () => {
+        const tripType = document.getElementById('tripType').value;
+        if (!startCoords) {
+            alert("Please select a Location.");
+            return;
+        }
+
+        if (tripType === 'cycling') {
+            generateLoopRoute('cycling', 20, 50);
+        } else if (tripType === 'trekking') {
+            generateLoopRoute('foot', 5, 15);
+        }
+    });
+
+    async function getWeather(lat, lon) {
+        const apiKey = "bc1301b0b23fe6ef52032a7e5bb70820";
+        try {
+            const res = await fetch(`https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`);
+            const data = await res.json();
+            const day1 = data.list[8];
+            const day2 = data.list[16];
+            const day3 = data.list[24];
+
+            const forecast = `
+                <div class="alert alert-info">
+                    <b>Weather Forecast (starting tomorrow):</b><br>
+                    <b>Day 1:</b> ${day1.weather[0].description}, ${day1.main.temp}°C<br>
+                    <b>Day 2:</b> ${day2.weather[0].description}, ${day2.main.temp}°C<br>
+                    <b>Day 3:</b> ${day3.weather[0].description}, ${day3.main.temp}°C
+                </div>`;
+            document.getElementById('weatherInfo').innerHTML = forecast;
+        } catch (err) {
+            console.error('Weather fetch error:', err);
+            document.getElementById('weatherInfo').innerHTML = `<div class="alert alert-warning">Unable to fetch weather info.</div>`;
+        }
+    }
+
+    window.addEventListener('load', () => {
+        document.getElementById('tripType').dispatchEvent(new Event('change'));
+    });
+
+    async function getCountryImageFromCity(cityName) {
+        if (!cityName) {
+            document.getElementById('cityImage').innerHTML = '';
+            return;
+        }
+
+        const accessKey = 'oBesjtgI_tLKG2apxA_ON3Z4W3YakkzFd648PH0eQOs'; 
+        const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(cityName)}&per_page=1&client_id=${accessKey}`;
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.results && data.results.length > 0) {
+                const imageUrl = data.results[0].urls.regular;
+
+                // ✅ Show the image in UI
+                document.getElementById('cityImage').innerHTML = `<img src="${imageUrl}" alt="${cityName}" class="img-fluid rounded" />`;
+
+                // ✅ Store in hidden input for saving to DB
+                document.getElementById('cityImageUrl').value = imageUrl;
+            } else {
+                document.getElementById('cityImage').innerHTML = 'No images found.';
+            }
+        } catch (error) {
+            console.error('Error fetching image from Unsplash', error);
+            document.getElementById('cityImage').innerHTML = 'Error loading image.';
+        }
+    }
+
+</script>

@@ -1,0 +1,185 @@
+<%- include('partials/header') %>
+<div class="container-fluid py-5">
+    <h2 class="text-center mb-4 fw-bold text-primary"><%= route.name %></h2>
+
+    <div class="row g-4">
+        <!-- Left Column (Map) -->
+        <div class="col-md-8">
+            <div class="card shadow-lg border-0 rounded-4">
+                <div id="map" style="height:500px;border-radius:12px 12px 0 0;"></div>
+            </div>
+        </div>
+
+        <!-- Right Column (Details) -->
+        <div class="col-md-4">
+            <div class="card shadow-lg border-0 rounded-4 p-4">
+                <h5 class="text-center mb-3 text-secondary">Route Details</h5>
+                <p><b>Description:</b> <%= route.description %></p>
+                <p id="distanceInfo" class="fw-semibold text-primary">
+                    Total Distance: <%= route.distance %> km
+                </p>
+                <div id="dayDistances" class="mb-3"></div>
+                <div id="weatherInfo" class="mb-3"></div>
+                <div id="cityImage" class="mb-3 text-center">
+                    <% if (route.cityImageUrl) { %>
+                        <img src="<%= route.cityImageUrl %>" alt="City Image" class="img-fluid rounded" />
+                    <% } else { %>
+                        <p>No image available</p>
+                    <% } %>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Scripts -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.2.0/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+<script src="https://unpkg.com/leaflet@1.2.0/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+<script>
+    const waypoints = <%- JSON.stringify(route.waypoints) %>;
+    const map = L.map('map').setView(waypoints[0], 13);
+    let startMarker = null;
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 20,
+        attribution: ''
+    }).addTo(map);
+
+    const latLngWaypoints = waypoints.map(coord => L.latLng(coord[0], coord[1]));
+
+    // Custom icons
+    const startIcon = L.icon({
+        iconUrl: 'https://cdn-icons-png.flaticon.com/512/64/64113.png',
+        iconSize: [35, 45],
+        iconAnchor: [17, 45]
+    });
+
+    const endIcon = L.icon({
+        iconUrl: 'https://cdn-icons-png.flaticon.com/512/64/64122.png',
+        iconSize: [35, 45],
+        iconAnchor: [17, 45]
+    });
+
+    // Fetch route from OSRM and style
+    L.Routing.control({
+        waypoints: latLngWaypoints,
+        router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' }),
+        lineOptions: { styles: [] },
+        createMarker: function (i, waypoint) {
+            if (i === 0) {
+                if (startMarker) map.removeLayer(startMarker);
+                startMarker = L.marker(waypoint.latLng, { icon: startIcon })
+                    .addTo(map)
+                    .bindPopup("<b>Start/End</b>")
+                    .openPopup();
+                return startMarker;
+            }
+            return null;
+        },
+        fitSelectedRoutes: true,
+        addWaypoints: false,
+        routeWhileDragging: false,
+        showAlternatives: false
+    }).on('routesfound', function(e) {
+        const route = e.routes[0];
+        const coords = route.coordinates;
+        const totalDistanceKm = (route.summary.totalDistance / 1000).toFixed(1);
+
+        // Split into 2 segments (Day 1, Day 2)
+        const halfDist = route.summary.totalDistance / 2;
+        let distAccum = 0, midpointIndex = 0;
+        for (let i = 1; i < coords.length; i++) {
+            distAccum += coords[i - 1].distanceTo(coords[i]);
+            if (distAccum >= halfDist) { midpointIndex = i; break; }
+        }
+
+        const day1Coords = coords.slice(0, midpointIndex + 1).map(c => [c.lat, c.lng]);
+        const day2Coords = coords.slice(midpointIndex).map(c => [c.lat, c.lng]);
+
+        if (window.dayPolylines) window.dayPolylines.forEach(poly => map.removeLayer(poly));
+            window.dayPolylines = [];
+
+        // Draw Day 1 and Day 2 routes
+        const poly1 = L.polyline(day1Coords, { color: '#FF0000', weight: 6 }).addTo(map); // Bright Red
+        const poly2 = L.polyline(day2Coords, { color: '#0000FF', weight: 6 }).addTo(map);
+        window.dayPolylines.push(poly1, poly2);
+
+        // Add arrows
+        addDirectionArrows(coords);
+
+        // Add Day markers (1 and 2)
+        addDayMarker([coords[0].lat, coords[0].lng], 1);
+        addDayMarker([coords[midpointIndex].lat, coords[midpointIndex].lng], 2);
+
+        // Update details
+        const distDay1 = (distAccum / 1000).toFixed(1);
+        const distDay2 = ((route.summary.totalDistance - distAccum) / 1000).toFixed(1);
+        document.getElementById('distanceInfo').innerText = `Total Loop Length: ${totalDistanceKm} km`;
+        document.getElementById('dayDistances').innerHTML = `<b>Day 1:</b> ${distDay1} km<br><b>Day 2:</b> ${distDay2} km`;
+
+        map.fitBounds(L.latLngBounds(coords));
+    }).addTo(map);
+
+    function addDayMarker(latlng, dayNum) {
+        L.marker(latlng, {
+            icon: L.divIcon({
+                className: 'day-marker',
+                html: `<div style="background:#0d6efd; color:#fff; border-radius:50%; width:26px; height:26px; display:flex; align-items:center; justify-content:center; font-weight:bold;">${dayNum}</div>`,
+                iconSize: [26, 26],
+                iconAnchor: [13, 26]
+            })
+        }).addTo(map);
+    }
+
+    function addDirectionArrows(coords) {
+        if (window.arrowMarkers && window.arrowMarkers.length > 0) {
+            window.arrowMarkers.forEach(m => map.removeLayer(m));
+        }
+        window.arrowMarkers = [];
+
+        const step = Math.floor(coords.length / 15);
+        for (let i = step; i < coords.length; i += step) {
+            const prev = coords[i - 1];
+            const curr = coords[i];
+            const angle = Math.atan2(curr.lat - prev.lat, curr.lng - prev.lng) * (180 / Math.PI);
+
+            const arrowIcon = L.divIcon({
+                html: `<div style="width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 14px solid orange; transform: rotate(${angle}deg); transform-origin: center; filter: drop-shadow(0 0 2px #fff);"></div>`,
+                className: '',
+                iconSize: [14, 14]
+            });
+
+            const arrowMarker = L.marker([curr.lat, curr.lng], { icon: arrowIcon, interactive: false }).addTo(map);
+            window.arrowMarkers.push(arrowMarker);
+        }
+    }
+
+    <% if (route.city) { %>
+        fetchWeather('<%= route.city %>');
+    <% } %>
+
+    function fetchWeather(city) {
+        const lat = waypoints[0][0];
+        const lng = waypoints[0][1]
+        const apiKey = "bc1301b0b23fe6ef52032a7e5bb70820";
+        fetch(`https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lng}&units=metric&appid=${apiKey}`)
+            .then(res => res.json())
+            .then(data => {
+                console.log(data)
+                if (data.list) {
+                    const day1 = data.list[8];
+                    const day2 = data.list[16];
+                    const forecast = `
+                        <div class="alert alert-info">
+                            <b>Weather Forecast:</b><br>
+                            <b>Day 1:</b> ${day1.weather[0].description}, ${day1.main.temp}°C<br>
+                            <b>Day 2:</b> ${day2.weather[0].description}, ${day2.main.temp}°C
+                        </div>`;
+                    document.getElementById('weatherInfo').innerHTML = forecast;
+                }
+            })
+            .catch(err => console.error('Weather fetch error:', err));
+    }
+</script>
