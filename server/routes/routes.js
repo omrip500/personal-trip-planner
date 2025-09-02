@@ -55,9 +55,25 @@ router.get('/route-history', authenticate, noCache, async (req, res) => {
 router.get('/view-route/:id', authenticate, noCache, async (req, res) => {
     try {
         const route = await Route.findById(req.params.id);
-        if (!route || route.userId !== req.user.id) {
+        
+        // Debug logging
+        console.log('Route ID:', req.params.id);
+        console.log('User ID from token:', req.user.id);
+        console.log('Route found:', route ? 'Yes' : 'No');
+        if (route) {
+            console.log('Route userId:', route.userId);
+            console.log('Match:', route.userId === req.user.id);
+        }
+        
+        if (!route) {
             return res.status(404).json({ error: 'Route not found' });
         }
+        
+        // Convert both to strings for comparison
+        if (route.userId.toString() !== req.user.id.toString()) {
+            return res.status(404).json({ error: 'Route not found' });
+        }
+        
         res.json({ route });
     } catch (error) {
         console.error(error);
